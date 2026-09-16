@@ -1,0 +1,11 @@
+name: jwr-trusted-caller
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+jobs:
+  call:
+    permissions:
+      id-token: write
+      contents: read
+    uses: ./.github/workflows/jwr-reusable.yml
