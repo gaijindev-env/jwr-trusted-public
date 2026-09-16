@@ -1,0 +1,37 @@
+name: jwr-reusable
+on:
+  workflow_call:
+jobs:
+  decode:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: mint, decode, STS-exchange, impersonate
+        run: |
+          set -e
+          AUD="//iam.googleapis.com/projects/336770977859/locations/global/workloadIdentityPools/gh-pool/providers/gh-e-map-jwr"
+          JWT=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$AUD" | jq -r .value)
+          echo "--- DECODED CLAIMS:"
+          echo "$JWT" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null | jq -c '{sub,repository,repository_id,repository_owner,job_workflow_ref,job_workflow_sha,ref,ref_type,event_name,workflow,workflow_ref}'
+          echo "--- STS EXCHANGE (provider gh-e-map-jwr):"
+          CODE=$(curl -s -o /tmp/sts.json -w '%{http_code}' -X POST https://sts.googleapis.com/v1/token \
+            -H 'Content-Type: application/x-www-form-urlencoded' \
+            -d grant_type=urn:ietf:params:oauth:grant-type:token-exchange \
+            -d requested_token_type=urn:ietf:params:oauth:token-type:access_token \
+            -d scope=https://www.googleapis.com/auth/cloud-platform \
+            -d subject_token_type=urn:ietf:params:oauth:token-type:id_token \
+            -d "audience=$AUD" \
+            --data-urlencode "subject_token=$JWT")
+          echo "STS_HTTP=$CODE"
+          cat /tmp/sts.json | jq -c 'if .access_token then {access_token_prefix:(.access_token[0:12]),token_type} else . end' 2>/dev/null || cat /tmp/sts.json
+          if [ "$CODE" = "200" ]; then
+            ACCESS=$(jq -r .access_token /tmp/sts.json)
+            echo "--- IMPERSONATE wif-canary (generateAccessToken):"
+            CODE2=$(curl -s -o /tmp/imp.json -w '%{http_code}' -X POST "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/wif-canary@cloudvrp-lab-gaijindev50.iam.gserviceaccount.com:generateAccessToken" \
+              -H "Authorization: Bearer $ACCESS" -H 'Content-Type: application/json' \
+              -d '{"scope":["https://www.googleapis.com/auth/cloud-platform"],"lifetime":"600s"}')
+            echo "IMP_HTTP=$CODE2"
+            cat /tmp/imp.json | jq -c 'if .accessToken then {accessToken_prefix:(.accessToken[0:12]),expireTime} else . end' 2>/dev/null || cat /tmp/imp.json
+          fi
